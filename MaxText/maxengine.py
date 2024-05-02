@@ -28,6 +28,7 @@ import jax.numpy as jnp
 from jax.sharding import PartitionSpec as P
 
 import common_types
+from jetstream.core import config_lib
 from jetstream.engine import engine_api
 from jetstream.engine import tokenizer_pb2
 
@@ -56,12 +57,12 @@ class MaxEngine(engine_api.Engine):
   JetStream efficient serving infrastructure.
   """
 
-  def __init__(self, config):
+  def __init__(self, config: Any, devices: config_lib.Devices | None = None):
     self.config = config
     self.rng = jax.random.PRNGKey(0)
 
     # Mesh definition
-    devices_array = max_utils.create_device_mesh(config)
+    devices_array = max_utils.create_device_mesh(config=config, devices=devices)
     self._mesh = jax.sharding.Mesh(devices_array, config.mesh_axes)
 
     # Model and Optimizer definition
@@ -84,7 +85,8 @@ class MaxEngine(engine_api.Engine):
     )
     self.kv_cache_annotations = max_utils.get_kv_cache_annotations(self.model, self.config, self.rng, self._mesh)
     self.kv_cache_shardings = jax.tree_util.tree_map(
-      lambda x: jax.sharding.NamedSharding(self._mesh, x), self.kv_cache_annotations)
+        lambda x: jax.sharding.NamedSharding(self._mesh, x), self.kv_cache_annotations
+    )
 
     if not self.model.quant:
       self.abstract_params = jax.tree_util.tree_map(
@@ -301,7 +303,12 @@ class MaxEngine(engine_api.Engine):
     }
 
   def get_prefix_destination_sharding(self) -> Any:
-    return jax.sharding.NamedSharding(mesh=self.mesh, spec=jax.sharding.PartitionSpec())
+    return {
+        "logits": self.replicated_sharding,
+        "cache": self.kv_cache_shardings,
+        "next_pos": self.replicated_sharding,
+        "generated_tokens": self.replicated_sharding,
+    }
 
   def get_tokenizer(self) -> tokenizer_pb2.TokenizerParameters:
     """Return a protobuf of tokenizer info, callable from Py or C++."""
